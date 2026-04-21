@@ -121,9 +121,7 @@ tools = [web_search, calculator, get_weather]
 llm = ChatAnthropic(model=MODEL, max_tokens=1024)
 llm_with_tools = llm.bind_tools(tools)
 
-print("Loading embedding model...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-print("Embedding model loaded.\n")
 
 
 # =============================================================================
@@ -208,17 +206,14 @@ def validate_claims(claims: list[str], observations: list[str]) -> tuple[list[st
         # Layer 1: Keyword check (fast)
         if keyword_check(claim, observations_text):
             grounded.append(claim)
-            print(f"  [GROUNDED-KW]   '{claim[:70]}'")
             continue
 
         # Layer 2: Embedding check (only if keywords failed)
         best_sim = embedding_check(claim, observations)
         if best_sim >= EMBEDDING_THRESHOLD:
             grounded.append(claim)
-            print(f"  [GROUNDED-EMB]  '{claim[:70]}' (sim: {best_sim:.2f})")
         else:
             ungrounded.append(claim)
-            print(f"  [UNGROUNDED]    '{claim[:70]}' (kw: fail, emb: {best_sim:.2f})")
 
     return grounded, ungrounded
 
@@ -245,12 +240,6 @@ def agent(state: MessagesState) -> dict:
     messages = [SystemMessage(content=AGENT_SYSTEM_PROMPT)] + state["messages"]
     response = llm_with_tools.invoke(messages)
 
-    # Print what the agent is doing
-    if response.tool_calls:
-        for tc in response.tool_calls:
-            print(f"\n>>> THOUGHT + ACTION: Calling {tc['name']}({tc['args']})")
-    else:
-        print(f"\n>>> THOUGHT: I have enough information. Providing final answer.")
 
     return {"messages": [response]}
 
@@ -270,9 +259,6 @@ def grounding_check(state: MessagesState) -> dict:
 
     # Get the final answer
     final_answer = messages[-1].content
-    print(f"\n{'=' * 60}")
-    print("  GROUNDING CHECK")
-    print(f"{'=' * 60}")
 
     # Collect all tool observations
     observations = [
@@ -281,7 +267,6 @@ def grounding_check(state: MessagesState) -> dict:
     ]
 
     if not observations:
-        print("  No tool observations found — cannot validate. Passing by default.")
         return {}
 
     # Extract factual claims from the answer using LLM
@@ -306,10 +291,7 @@ def grounding_check(state: MessagesState) -> dict:
             claims = []
 
     if not claims:
-        print("  No factual claims extracted — passing by default.")
         return {}
-
-    print(f"\n  Extracted {len(claims)} factual claims. Validating...\n")
 
     # Validate each claim
     grounded, ungrounded = validate_claims(claims, observations)
@@ -318,14 +300,9 @@ def grounding_check(state: MessagesState) -> dict:
     total = len(grounded) + len(ungrounded)
     score = len(grounded) / total if total > 0 else 1.0
 
-    print(f"\n  Grounding Score: {len(grounded)}/{total} = {score:.0%}")
-    print(f"  Threshold: {GROUNDING_THRESHOLD:.0%}")
-
     if score >= GROUNDING_THRESHOLD:
-        print(f"  Result: PASS ✓")
         return {}
     else:
-        print(f"  Result: FAIL ✗ — Answer contains ungrounded claims")
         # Return feedback to the agent about ungrounded claims
         feedback = (
             f"GROUNDING CHECK FAILED (score: {score:.0%}, need: {GROUNDING_THRESHOLD:.0%}).\n\n"
@@ -367,9 +344,7 @@ def after_grounding(state: MessagesState) -> Literal["agent", "__end__"]:
     if isinstance(last_message, HumanMessage) and "GROUNDING CHECK FAILED" in last_message.content:
         retry_count += 1
         if retry_count > MAX_RETRIES:
-            print(f"\n>>> Max retries ({MAX_RETRIES}) reached. Accepting answer as-is.")
             return "__end__"
-        print(f"\n>>> Retry {retry_count}/{MAX_RETRIES}: Sending agent back to verify claims.")
         return "agent"
 
     return "__end__"
@@ -413,37 +388,21 @@ def build_react_graph():
 def main():
     question = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_QUESTION
 
-    print("\n" + "*" * 60)
-    print("  ReAct PATTERN DEMO (with Grounding Validation)")
-    print(f"  Question: {question}")
-    print(f"  Max tool calls: {MAX_ITERATIONS}")
-    print(f"  Grounding threshold: {GROUNDING_THRESHOLD:.0%}")
-    print(f"  Max retries: {MAX_RETRIES}")
-    print("*" * 60)
-
     app = build_react_graph()
 
     initial_input = {
         "messages": [HumanMessage(content=question)]
     }
 
-    # Run with recursion limit to prevent infinite loops
     result = app.invoke(initial_input, config={"recursion_limit": MAX_ITERATIONS * 2})
 
     # Print final answer
-    for msg in reversed(result["messages"]):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            print("\n" + "=" * 60)
-            print("  FINAL ANSWER (GROUNDED)")
-            print("=" * 60)
+    all_messages = result.get("messages", [])
+    for msg in reversed(all_messages):
+        if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
+            print("\nFINAL ANSWER:")
             print(msg.content)
             break
-
-    # Print summary
-    tool_calls = sum(1 for msg in result["messages"] if isinstance(msg, ToolMessage))
-    print(f"\n>>> Tool calls made: {tool_calls}")
-    print(f">>> Grounding retries: {retry_count}")
-    print(">>> Done!\n")
 
 
 if __name__ == "__main__":
